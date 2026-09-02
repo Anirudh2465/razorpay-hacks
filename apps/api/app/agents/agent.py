@@ -1,9 +1,13 @@
-from openai import AsyncOpenAI
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, TypedDict, Annotated
+import logging
 from app.config import settings
 
-client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, START, END
+
+logger = logging.getLogger(__name__)
 
 class InvestigationResult(BaseModel):
     is_anomaly: bool
@@ -12,37 +16,93 @@ class InvestigationResult(BaseModel):
     recommended_action: str
     affected_nodes: List[str]
 
+class InvestigationState(TypedDict):
+    case_data: dict
+    graph_context: str
+    extracted_facts: str
+    analysis: str
+    result: InvestigationResult
+
 class InvestigationAgent:
-    @staticmethod
-    async def investigate_discrepancy(case_data: dict, graph_context: str) -> InvestigationResult:
+    def __init__(self):
         if not settings.OPENAI_API_KEY:
-            # Fallback for hackathon demo if key is missing
-            return InvestigationResult(
+            logger.warning("OPENAI_API_KEY is not set. InvestigationAgent will run in mock mode.")
+            self.llm = None
+        else:
+            self.llm = ChatOpenAI(model="gpt-4o-2024-08-06", api_key=settings.OPENAI_API_KEY)
+        self.graph = self._build_graph()
+
+    def _build_graph(self):
+        workflow = StateGraph(InvestigationState)
+
+        workflow.add_node("extract_facts", self.node_extract_facts)
+        workflow.add_node("analyze", self.node_analyze)
+        workflow.add_node("formulate_conclusion", self.node_formulate_conclusion)
+
+        workflow.add_edge(START, "extract_facts")
+        workflow.add_edge("extract_facts", "analyze")
+        workflow.add_edge("analyze", "formulate_conclusion")
+        workflow.add_edge("formulate_conclusion", END)
+
+        return workflow.compile()
+
+    def node_extract_facts(self, state: InvestigationState):
+        if not self.llm:
+            return {"extracted_facts": "Mock facts extracted."}
+            
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an AI Finance Controller. Extract key financial facts from the provided case data and graph context."),
+            ("user", "Case Data: {case_data}\n\nGraph Context: {graph_context}")
+        ])
+        chain = prompt | self.llm
+        response = chain.invoke({"case_data": state["case_data"], "graph_context": state["graph_context"]})
+        return {"extracted_facts": response.content}
+
+    def node_analyze(self, state: InvestigationState):
+        if not self.llm:
+            return {"analysis": "Mock analysis."}
+            
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "Analyze the extracted financial facts to determine discrepancies or anomalies."),
+            ("user", "Facts: {extracted_facts}")
+        ])
+        chain = prompt | self.llm
+        response = chain.invoke({"extracted_facts": state["extracted_facts"]})
+        return {"analysis": response.content}
+
+    def node_formulate_conclusion(self, state: InvestigationState):
+        if not self.llm:
+            return {"result": InvestigationResult(
                 is_anomaly=True,
                 confidence_score=0.85,
                 root_cause="Mocked missing key: Fee mismatch between Payment and Settlement",
                 recommended_action="Create fee adjustment entry",
                 affected_nodes=["PAY-001", "SET-001"]
-            )
+            )}
             
-        system_prompt = """
-        You are an AI Finance Controller. Your job is to investigate reconciliation discrepancies.
-        Analyze the provided case data and the relevant subgraph context to determine the root cause.
-        Return the structured analysis.
-        """
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "Based on the analysis, formulate a structured final conclusion."),
+            ("user", "Analysis: {analysis}")
+        ])
+        structured_llm = self.llm.with_structured_output(InvestigationResult)
+        chain = prompt | structured_llm
+        response = chain.invoke({"analysis": state["analysis"]})
+        return {"result": response}
+
+    async def investigate_discrepancy(self, case_data: dict, graph_context: str) -> InvestigationResult:
+        inputs = {
+            "case_data": case_data,
+            "graph_context": graph_context,
+            "extracted_facts": "",
+            "analysis": "",
+            "result": None
+        }
         
-        user_prompt = f"Case Data:\n{case_data}\n\nGraph Context:\n{graph_context}"
-        
-        response = await client.beta.chat.completions.parse(
-            model="gpt-4o-2024-08-06",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format=InvestigationResult
-        )
-        
-        return response.choices[0].message.parsed
+        final_state = await self.graph.ainvoke(inputs)
+        return final_state["result"]
+
+# Singleton instance
+investigation_agent = InvestigationAgent()
 
 class QAAgent:
     @staticmethod
@@ -50,17 +110,13 @@ class QAAgent:
         if not settings.OPENAI_API_KEY:
             return "Mock response: The OpenAI API key is not configured. Please set it in .env."
             
-        system_prompt = """
-        You are a conversational AI Finance Assistant. Answer the user's question based strictly on the provided financial graph context.
-        If the context does not contain the answer, say you do not have enough information.
-        """
+        llm = ChatOpenAI(model="gpt-4o", api_key=settings.OPENAI_API_KEY)
         
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Context: {context}\nQuestion: {question}"}
-            ]
-        )
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a conversational AI Finance Assistant. Answer the user's question based strictly on the provided financial graph context. If the context does not contain the answer, say you do not have enough information."),
+            ("user", "Context: {context}\nQuestion: {question}")
+        ])
         
-        return response.choices[0].message.content
+        chain = prompt | llm
+        response = await chain.ainvoke({"context": context, "question": question})
+        return response.content

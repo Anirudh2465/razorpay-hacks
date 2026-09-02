@@ -11,10 +11,24 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     
+    # MinIO (S3)
+    MINIO_ENDPOINT: str = "http://localhost:9000"
+    MINIO_ACCESS_KEY: str = "admin"
+    MINIO_SECRET_KEY: str = "password123"
+    MINIO_BUCKET: str = "finance-data"
+
+    # Kafka / Redpanda
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    KAFKA_TOPIC: str = "reconciliation-events"
+    
     # Neo4j
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
-    NEO4J_PASSWORD: str = "neo4jpassword"
+    NEO4J_PASSWORD: str = "password123"
+    
+    # Observability
+    SENTRY_DSN: str = "" # Provide this in .env for error tracking
+
     
     # Temporal
     TEMPORAL_URL: str = "localhost:7233"

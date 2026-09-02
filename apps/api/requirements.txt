@@ -13,3 +13,17 @@ openai>=1.35.7
 polars>=1.1.0
 razorpay>=1.4.1
 python-dotenv>=1.0.1
+
+# AI & Orchestration
+langchain
+langgraph
+langchain-openai
+
+# Data & Event Bus
+polars
+confluent-kafka
+aioboto3
+
+# Observability
+sentry-sdk
+prometheus-client>=1.0.1
